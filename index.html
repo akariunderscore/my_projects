@@ -14,13 +14,15 @@
     padding: 2rem 1rem; box-sizing: border-box;
   }
   h1 { font-weight: normal; font-size: 1.1rem; margin: 0 0 .25rem; color: #eee; }
+  h2 { font-weight: normal; font-size: .95rem; margin: 2rem 0 .5rem; color: #ddd; }
   .sub { margin: 0 0 1.5rem; color: #888; max-width: 34rem; text-align: center; }
-  canvas {
+  canvas { border: 1px solid #333; background: #000; }
+  #c {
     width: min(512px, 90vw); height: auto; aspect-ratio: 1;
     image-rendering: pixelated; image-rendering: crisp-edges;
-    border: 1px solid #333; background: #000;
   }
-  .row { margin: 1rem 0; display: flex; gap: 1rem; align-items: center; }
+  #h { width: min(512px, 90vw); height: auto; aspect-ratio: 512 / 160; }
+  .row { margin: 1rem 0; display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; justify-content: center; }
   button {
     font: inherit; background: #222; color: #eee;
     border: 1px solid #444; padding: .4rem 1rem; cursor: pointer;
@@ -29,6 +31,10 @@
   #meta { color: #777; font-size: .85rem; }
   .note { max-width: 34rem; color: #888; font-size: .85rem; }
   .note strong { color: #bbb; font-weight: normal; }
+  table { border-collapse: collapse; font-size: .85rem; max-width: 34rem; width: min(512px, 90vw); }
+  td, th { padding: .2rem .5rem; text-align: left; border-bottom: 1px solid #222; }
+  th { color: #777; font-weight: normal; }
+  td.ok { color: #8c8; } td.meh { color: #cc8; } td.bad { color: #e77; }
 </style>
 </head>
 <body>
@@ -39,12 +45,14 @@
 
   <div class="row">
     <button id="roll">re-roll</button>
+    <button id="roll10">re-roll x10</button>
+    <button id="reset">forget everything</button>
     <span id="meta"></span>
   </div>
 
   <p class="note">
     <strong>what this is:</strong> a way to look. row y, column x is byte number y*256+x, drawn as grey level 0..255.
-    tests (histogram, monobit, runs, the pair plot) are coming soon&trade;
+    the pair plot is still coming soon&trade;
   </p>
   <p class="note">
     <strong>what this isn't:</strong> an audit. a good backdoored generator looks exactly like static to every test on this page,
@@ -52,32 +60,138 @@
     a stuck bit, a value that never shows up. that's a much smaller claim, but it's the one you can check yourself
   </p>
 
+  <h2>byte histogram (pooled over every roll)</h2>
+  <canvas id="h" width="512" height="160"></canvas>
+  <p class="note">
+    raw counts would just be 256 identical-looking bars, so each bar is how far that value's count sits from expected,
+    in standard deviations (dashed lines at &plusmn;3). fair die: grass, mostly inside the lines, no pattern.
+    a value that has <em>never</em> shown up gets a full-height red bar, because that's the one you came here for
+  </p>
+
+  <h2>numbers</h2>
+  <table>
+    <thead><tr><th>test</th><th>got</th><th>fine if roughly</th></tr></thead>
+    <tbody id="stats"></tbody>
+  </table>
+  <p class="note">
+    z-scores: |z| under ~2.6 is boring (good), and one in a hundred honest rolls will land outside that anyway, so
+    a single yellow is a shrug. red that <em>stays</em> red as the pool grows is the interesting kind.
+    runs counts places where the bitstream flips 0&rarr;1 or 1&rarr;0 (msb first within each byte), which catches bits that are
+    too sticky or too jittery even when the ones/zeros balance is fine
+  </p>
+
 <script>
 const N = 65536;
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const img = ctx.createImageData(256, 256);
+const hcan = document.getElementById('h');
+const hctx = hcan.getContext('2d');
 const meta = document.getElementById('meta');
-let rolls = 0;
+const statsEl = document.getElementById('stats');
 
-function roll() {
+// bit count per byte value, so monobit isn't a nested loop
+const POP = new Uint8Array(256);
+for (let v = 0; v < 256; v++) { let c = 0, x = v; while (x) { c += x & 1; x >>= 1; } POP[v] = c; }
+
+let rolls, pooled, pooledOnes;
+function reset() { rolls = 0; pooled = new Float64Array(256); pooledOnes = 0; }
+reset();
+
+function zClass(z) { const a = Math.abs(z); return a < 2.58 ? 'ok' : a < 3.9 ? 'meh' : 'bad'; }
+
+function roll(draw = true) {
   const bytes = new Uint8Array(N);          // 65536 is exactly the per-call cap
   crypto.getRandomValues(bytes);
-  const px = img.data;
-  let sum = 0;
+
+  let sum = 0, ones = 0, flips = 0, prev = bytes[0] >> 7;
   for (let i = 0; i < N; i++) {
     const v = bytes[i];
-    const o = i * 4;
-    px[o] = px[o + 1] = px[o + 2] = v;
-    px[o + 3] = 255;
     sum += v;
+    ones += POP[v];
+    pooled[v]++;
+    for (let b = 7; b >= 0; b--) {           // runs: count transitions in the bitstream
+      const bit = (v >> b) & 1;
+      if (bit !== prev) flips++;
+      prev = bit;
+    }
+  }
+  pooledOnes += ones;
+  rolls++;
+
+  if (!draw) return;
+  const px = img.data;
+  for (let i = 0; i < N; i++) {
+    const o = i * 4;
+    px[o] = px[o + 1] = px[o + 2] = bytes[i];
+    px[o + 3] = 255;
   }
   ctx.putImageData(img, 0, 0);
-  rolls++;
   meta.textContent = `roll #${rolls}, mean ${(sum / N).toFixed(2)} (expect ~127.5)`;
+  drawHist();
+  showStats(ones, flips);
 }
 
-document.getElementById('roll').addEventListener('click', roll);
+function drawHist() {
+  const W = hcan.width, H = hcan.height, mid = H / 2, scale = mid / 4; // ±4 sd fills the box
+  const total = rolls * N, E = total / 256, sd = Math.sqrt(E * (1 - 1 / 256));
+  hctx.fillStyle = '#000'; hctx.fillRect(0, 0, W, H);
+  hctx.strokeStyle = '#333'; hctx.setLineDash([4, 4]);
+  for (const k of [-3, 3]) {
+    hctx.beginPath(); hctx.moveTo(0, mid - k * scale); hctx.lineTo(W, mid - k * scale); hctx.stroke();
+  }
+  hctx.setLineDash([]);
+  hctx.strokeStyle = '#444';
+  hctx.beginPath(); hctx.moveTo(0, mid); hctx.lineTo(W, mid); hctx.stroke();
+  const bw = W / 256;
+  for (let v = 0; v < 256; v++) {
+    if (pooled[v] === 0) { hctx.fillStyle = '#e44'; hctx.fillRect(v * bw, 0, bw, H); continue; }
+    const z = Math.max(-4, Math.min(4, (pooled[v] - E) / sd));
+    hctx.fillStyle = Math.abs(z) > 3 ? '#cc8' : '#6a6';
+    const h = z * scale;
+    hctx.fillRect(v * bw, h > 0 ? mid - h : mid, Math.max(1, bw - 0.5), Math.abs(h));
+  }
+}
+
+function row(name, got, expect, cls) {
+  return `<tr><td>${name}</td><td class="${cls}">${got}</td><td>${expect}</td></tr>`;
+}
+
+function showStats(ones, flips) {
+  const total = rolls * N, E = total / 256;
+  let chi = 0, empty = 0, lo = Infinity, hi = -Infinity;
+  for (let v = 0; v < 256; v++) {
+    const c = pooled[v];
+    chi += (c - E) * (c - E) / E;
+    if (c === 0) empty++;
+    if (c < lo) lo = c; if (c > hi) hi = c;
+  }
+  // chi-square, 255 dof: 99% band is ~201..317 (wilson-hilferty, close enough)
+  const chiCls = chi > 201 && chi < 317 ? 'ok' : chi > 185 && chi < 340 ? 'meh' : 'bad';
+
+  const bits = N * 8;
+  const zMono = (ones - bits / 2) / Math.sqrt(bits / 4);
+  const pbits = total * 8;
+  const zMonoP = (pooledOnes - pbits / 2) / Math.sqrt(pbits / 4);
+
+  // runs = flips + 1; expected given observed proportion p: 2n p(1-p) + 1
+  const p = ones / bits, runs = flips + 1;
+  const eRuns = 2 * bits * p * (1 - p) + 1;
+  const sdRuns = 2 * Math.sqrt(2 * bits) * p * (1 - p);
+  const zRuns = (runs - eRuns) / sdRuns;
+
+  statsEl.innerHTML =
+    row('values never seen', empty, '0 (after the first roll, basically certain)', empty ? 'bad' : 'ok') +
+    row('pooled count range', `${lo} .. ${hi}`, `around ${E.toFixed(0)} &plusmn; ${(4 * Math.sqrt(E)).toFixed(0)}`, 'ok') +
+    row('chi-square, 255 dof', chi.toFixed(1), '201 .. 317 (99%)', chiCls) +
+    row('monobit, this roll', `${ones} ones, z = ${zMono.toFixed(2)}`, `${bits / 2} &plusmn; ${(2.58 * Math.sqrt(bits / 4)).toFixed(0)}`, zClass(zMono)) +
+    row(`monobit, pooled (${rolls} roll${rolls > 1 ? 's' : ''})`, `z = ${zMonoP.toFixed(2)}`, '|z| &lt; 2.6', zClass(zMonoP)) +
+    row('runs, this roll', `${runs}, z = ${zRuns.toFixed(2)}`, `${eRuns.toFixed(0)} &plusmn; ${(2.58 * sdRuns).toFixed(0)}`, zClass(zRuns));
+}
+
+document.getElementById('roll').addEventListener('click', () => roll());
+document.getElementById('roll10').addEventListener('click', () => { for (let i = 0; i < 9; i++) roll(false); roll(); });
+document.getElementById('reset').addEventListener('click', () => { reset(); roll(); });
 roll();
 </script>
 </body>
