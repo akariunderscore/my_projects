@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>chipped dice</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; min-height: 100vh;
+    background: #111; color: #ccc;
+    font: 15px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 2rem 1rem; box-sizing: border-box;
+  }
+  h1 { font-weight: normal; font-size: 1.1rem; margin: 0 0 .25rem; color: #eee; }
+  .sub { margin: 0 0 1.5rem; color: #888; max-width: 34rem; text-align: center; }
+  canvas {
+    width: min(512px, 90vw); height: auto; aspect-ratio: 1;
+    image-rendering: pixelated; image-rendering: crisp-edges;
+    border: 1px solid #333; background: #000;
+  }
+  .row { margin: 1rem 0; display: flex; gap: 1rem; align-items: center; }
+  button {
+    font: inherit; background: #222; color: #eee;
+    border: 1px solid #444; padding: .4rem 1rem; cursor: pointer;
+  }
+  button:hover { background: #2c2c2c; }
+  #meta { color: #777; font-size: .85rem; }
+  .note { max-width: 34rem; color: #888; font-size: .85rem; }
+  .note strong { color: #bbb; font-weight: normal; }
+</style>
+</head>
+<body>
+  <h1>chipped dice</h1>
+  <p class="sub">65536 bytes out of crypto.getRandomValues, in your browser, one byte per pixel. it should look like static. if it looks like anything else, something is Very Wrong</p>
+
+  <canvas id="c" width="256" height="256"></canvas>
+
+  <div class="row">
+    <button id="roll">re-roll</button>
+    <span id="meta"></span>
+  </div>
+
+  <p class="note">
+    <strong>what this is:</strong> a way to look. row y, column x is byte number y*256+x, drawn as grey level 0..255.
+    tests (histogram, monobit, runs, the pair plot) are coming soon&trade;
+  </p>
+  <p class="note">
+    <strong>what this isn't:</strong> an audit. a good backdoored generator looks exactly like static to every test on this page,
+    that's the whole point of it being good. what eyeballs and boring stats can catch is a missing face on the die,
+    a stuck bit, a value that never shows up. that's a much smaller claim, but it's the one you can check yourself
+  </p>
+
+<script>
+const N = 65536;
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const img = ctx.createImageData(256, 256);
+const meta = document.getElementById('meta');
+let rolls = 0;
+
+function roll() {
+  const bytes = new Uint8Array(N);          // 65536 is exactly the per-call cap
+  crypto.getRandomValues(bytes);
+  const px = img.data;
+  let sum = 0;
+  for (let i = 0; i < N; i++) {
+    const v = bytes[i];
+    const o = i * 4;
+    px[o] = px[o + 1] = px[o + 2] = v;
+    px[o + 3] = 255;
+    sum += v;
+  }
+  ctx.putImageData(img, 0, 0);
+  rolls++;
+  meta.textContent = `roll #${rolls}, mean ${(sum / N).toFixed(2)} (expect ~127.5)`;
+}
+
+document.getElementById('roll').addEventListener('click', roll);
+roll();
+</script>
+</body>
+</html>
