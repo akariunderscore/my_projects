@@ -17,7 +17,7 @@
   h2 { font-weight: normal; font-size: .95rem; margin: 2rem 0 .5rem; color: #ddd; }
   .sub { margin: 0 0 1.5rem; color: #888; max-width: 34rem; text-align: center; }
   canvas { border: 1px solid #333; background: #000; }
-  #c {
+  #c, #p {
     width: min(512px, 90vw); height: auto; aspect-ratio: 1;
     image-rendering: pixelated; image-rendering: crisp-edges;
   }
@@ -28,7 +28,8 @@
     border: 1px solid #444; padding: .4rem 1rem; cursor: pointer;
   }
   button:hover { background: #2c2c2c; }
-  #meta { color: #777; font-size: .85rem; }
+  button.on { border-color: #e44; color: #f99; }
+  #meta, #pmeta { color: #777; font-size: .85rem; }
   .note { max-width: 34rem; color: #888; font-size: .85rem; }
   .note strong { color: #bbb; font-weight: normal; }
   table { border-collapse: collapse; font-size: .85rem; max-width: 34rem; width: min(512px, 90vw); }
@@ -47,17 +48,29 @@
     <button id="roll">re-roll</button>
     <button id="roll10">re-roll x10</button>
     <button id="reset">forget everything</button>
-    <span id="meta"></span>
+    <button id="chip" title="make the die unable to roll 0, then see if you can tell">chip the die</button>
   </div>
+  <div class="row"><span id="meta"></span></div>
 
   <p class="note">
     <strong>what this is:</strong> a way to look. row y, column x is byte number y*256+x, drawn as grey level 0..255.
-    the pair plot is still coming soon&trade;
+    <strong>chip the die</strong> throws away every 0 and rerolls it, which is roughly the shape of the
+    "this rng can never emit zero" bug. costs about 0.006 bits per byte. try spotting it in the static above (you can't)
   </p>
   <p class="note">
     <strong>what this isn't:</strong> an audit. a good backdoored generator looks exactly like static to every test on this page,
     that's the whole point of it being good. what eyeballs and boring stats can catch is a missing face on the die,
     a stuck bit, a value that never shows up. that's a much smaller claim, but it's the one you can check yourself
+  </p>
+
+  <h2>pair plot (pooled over every roll)</h2>
+  <canvas id="p" width="256" height="256"></canvas>
+  <div class="row"><span id="pmeta"></span></div>
+  <p class="note">
+    every byte and the one after it make a point: x is the first, y is the second. 65535 pairs per roll into 65536 cells,
+    so one roll is basically noise. brightness is how far each cell's count sits from expected (mid grey = spot on).
+    once there's enough data that an honest empty cell is ~impossible (16 rolls, roughly 1 in 135 odds of even one false alarm),
+    any cell that has <em>never</em> been hit goes red. a missing value can't hide here: it's a whole row and a whole column
   </p>
 
   <h2>byte histogram (pooled over every roll)</h2>
@@ -82,27 +95,48 @@
 
 <script>
 const N = 65536;
+const RED_AFTER = 16;                        // rolls (~16 expected hits per pair cell) before "never hit" means anything
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const img = ctx.createImageData(256, 256);
+const pcan = document.getElementById('p');
+const pctx = pcan.getContext('2d');
+const pimg = pctx.createImageData(256, 256);
 const hcan = document.getElementById('h');
 const hctx = hcan.getContext('2d');
 const meta = document.getElementById('meta');
+const pmeta = document.getElementById('pmeta');
 const statsEl = document.getElementById('stats');
+const chipBtn = document.getElementById('chip');
 
-// bit count per byte value, so monobit isn't a nested loop
 const POP = new Uint8Array(256);
 for (let v = 0; v < 256; v++) { let c = 0, x = v; while (x) { c += x & 1; x >>= 1; } POP[v] = c; }
 
-let rolls, pooled, pooledOnes;
-function reset() { rolls = 0; pooled = new Float64Array(256); pooledOnes = 0; }
+let chipped = false;
+let rolls, pooled, pooledOnes, pairs, pairTotal;
+function reset() {
+  rolls = 0; pooled = new Float64Array(256); pooledOnes = 0;
+  pairs = new Uint32Array(65536); pairTotal = 0;
+}
 reset();
 
 function zClass(z) { const a = Math.abs(z); return a < 2.58 ? 'ok' : a < 3.9 ? 'meh' : 'bad'; }
 
+// the chip: any 0 gets replaced by a fresh nonzero byte
+const spare = new Uint8Array(256);
+let spareAt = 256;
+function nonzero() {
+  for (;;) {
+    if (spareAt >= 256) { crypto.getRandomValues(spare); spareAt = 0; }
+    const v = spare[spareAt++];
+    if (v) return v;
+  }
+}
+
 function roll(draw = true) {
   const bytes = new Uint8Array(N);          // 65536 is exactly the per-call cap
   crypto.getRandomValues(bytes);
+  if (chipped) for (let i = 0; i < N; i++) if (bytes[i] === 0) bytes[i] = nonzero();
 
   let sum = 0, ones = 0, flips = 0, prev = bytes[0] >> 7;
   for (let i = 0; i < N; i++) {
@@ -110,12 +144,14 @@ function roll(draw = true) {
     sum += v;
     ones += POP[v];
     pooled[v]++;
-    for (let b = 7; b >= 0; b--) {           // runs: count transitions in the bitstream
+    if (i) pairs[(v << 8) | bytes[i - 1]]++;  // y = this byte, x = the one before
+    for (let b = 7; b >= 0; b--) {
       const bit = (v >> b) & 1;
       if (bit !== prev) flips++;
       prev = bit;
     }
   }
+  pairTotal += N - 1;
   pooledOnes += ones;
   rolls++;
 
@@ -127,13 +163,37 @@ function roll(draw = true) {
     px[o + 3] = 255;
   }
   ctx.putImageData(img, 0, 0);
-  meta.textContent = `roll #${rolls}, mean ${(sum / N).toFixed(2)} (expect ~127.5)`;
+  meta.textContent = `roll #${rolls}${chipped ? ' (chipped)' : ''}, mean ${(sum / N).toFixed(2)} (expect ~127.5)`;
+  drawPairs();
   drawHist();
   showStats(ones, flips);
 }
 
+function drawPairs() {
+  const E = pairTotal / 65536, sd = Math.sqrt(E);
+  const armed = rolls >= RED_AFTER;         // not E >= 16: E is 16*65535/65536 there, a hair short, and it'd never arm
+  // grey = 110 + 32z, clamped. mid-grey for "as expected", so ±3 sd spans ~14..206: contrast without blowing out
+  const px = pimg.data;
+  let empty = 0;
+  for (let k = 0; k < 65536; k++) {
+    const c = pairs[k], o = k * 4;
+    if (c === 0 && armed) {
+      px[o] = 230; px[o + 1] = 50; px[o + 2] = 50; empty++;
+    } else {
+      const g = Math.max(0, Math.min(255, 110 + 32 * (c - E) / sd));
+      px[o] = px[o + 1] = px[o + 2] = g;
+    }
+    px[o + 3] = 255;
+  }
+  pctx.putImageData(pimg, 0, 0);
+  const left = RED_AFTER - rolls;
+  pmeta.textContent = armed
+    ? `~${E.toFixed(1)} hits expected per cell, ${empty} never hit${empty ? ' (that is not static)' : ''}`
+    : `~${E.toFixed(1)} hits expected per cell, too early to call empties (${left} more roll${left > 1 ? 's' : ''})`;
+}
+
 function drawHist() {
-  const W = hcan.width, H = hcan.height, mid = H / 2, scale = mid / 4; // ±4 sd fills the box
+  const W = hcan.width, H = hcan.height, mid = H / 2, scale = mid / 4;
   const total = rolls * N, E = total / 256, sd = Math.sqrt(E * (1 - 1 / 256));
   hctx.fillStyle = '#000'; hctx.fillRect(0, 0, W, H);
   hctx.strokeStyle = '#333'; hctx.setLineDash([4, 4]);
@@ -166,7 +226,6 @@ function showStats(ones, flips) {
     if (c === 0) empty++;
     if (c < lo) lo = c; if (c > hi) hi = c;
   }
-  // chi-square, 255 dof: 99% band is ~201..317 (wilson-hilferty, close enough)
   const chiCls = chi > 201 && chi < 317 ? 'ok' : chi > 185 && chi < 340 ? 'meh' : 'bad';
 
   const bits = N * 8;
@@ -174,7 +233,6 @@ function showStats(ones, flips) {
   const pbits = total * 8;
   const zMonoP = (pooledOnes - pbits / 2) / Math.sqrt(pbits / 4);
 
-  // runs = flips + 1; expected given observed proportion p: 2n p(1-p) + 1
   const p = ones / bits, runs = flips + 1;
   const eRuns = 2 * bits * p * (1 - p) + 1;
   const sdRuns = 2 * Math.sqrt(2 * bits) * p * (1 - p);
@@ -182,7 +240,7 @@ function showStats(ones, flips) {
 
   statsEl.innerHTML =
     row('values never seen', empty, '0 (after the first roll, basically certain)', empty ? 'bad' : 'ok') +
-    row('pooled count range', `${lo} .. ${hi}`, `around ${E.toFixed(0)} &plusmn; ${(4 * Math.sqrt(E)).toFixed(0)}`, 'ok') +
+    row('pooled count range', `${lo} .. ${hi}`, `around ${E.toFixed(0)} &plusmn; ${(4 * Math.sqrt(E)).toFixed(0)}`, lo === 0 ? 'bad' : 'ok') +
     row('chi-square, 255 dof', chi.toFixed(1), '201 .. 317 (99%)', chiCls) +
     row('monobit, this roll', `${ones} ones, z = ${zMono.toFixed(2)}`, `${bits / 2} &plusmn; ${(2.58 * Math.sqrt(bits / 4)).toFixed(0)}`, zClass(zMono)) +
     row(`monobit, pooled (${rolls} roll${rolls > 1 ? 's' : ''})`, `z = ${zMonoP.toFixed(2)}`, '|z| &lt; 2.6', zClass(zMonoP)) +
@@ -192,6 +250,12 @@ function showStats(ones, flips) {
 document.getElementById('roll').addEventListener('click', () => roll());
 document.getElementById('roll10').addEventListener('click', () => { for (let i = 0; i < 9; i++) roll(false); roll(); });
 document.getElementById('reset').addEventListener('click', () => { reset(); roll(); });
+chipBtn.addEventListener('click', () => {
+  chipped = !chipped;                       // mixing honest and chipped rolls in one pool would muddy both, so start over
+  chipBtn.classList.toggle('on', chipped);
+  chipBtn.textContent = chipped ? 'un-chip the die' : 'chip the die';
+  reset(); roll();
+});
 roll();
 </script>
 </body>
