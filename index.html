@@ -48,7 +48,10 @@
     <button id="roll">re-roll</button>
     <button id="roll10">re-roll x10</button>
     <button id="reset">forget everything</button>
+  </div>
+  <div class="row">
     <button id="chip" title="make the die unable to roll 0, then see if you can tell">chip the die</button>
+    <button id="stick" title="make the lowest bit lean towards 1, then see which tests notice">sticky bit</button>
   </div>
   <div class="row"><span id="meta"></span></div>
 
@@ -56,6 +59,13 @@
     <strong>what this is:</strong> a way to look. row y, column x is byte number y*256+x, drawn as grey level 0..255.
     <strong>chip the die</strong> throws away every 0 and rerolls it, which is roughly the shape of the
     "this rng can never emit zero" bug. costs about 0.006 bits per byte. try spotting it in the static above (you can't)
+  </p>
+  <p class="note">
+    <strong>sticky bit</strong> is the other kind of broken: no value goes missing, but on about 2% of bytes the lowest bit
+    gets forced to 1. every face still shows up, so the pair plot's red and the histogram's red bars have nothing to say.
+    the <em>pooled</em> monobit row notices, slowly (one roll sits around z = 1.8, a shrug; ten rolls and it's red and
+    staying red). chi-square gets there first, around five rolls. runs mostly doesn't move, which is
+    sort of the lesson: each test is a different-shaped hole to fall through
   </p>
   <p class="note">
     <strong>what this isn't:</strong> an audit. a good backdoored generator looks exactly like static to every test on this page,
@@ -80,6 +90,7 @@
     raw counts would just be 256 identical-looking bars, so each bar is how far that value's count sits from expected,
     in standard deviations (dashed lines at &plusmn;3). fair die: grass, mostly inside the lines, no pattern.
     a value that has <em>never</em> shown up gets a full-height red bar, because that's the one you came here for
+    (sticky bit gives you a comb instead: odd values lean up, even lean down, very faint until the pool is huge)
   </p>
 
   <h2>numbers</h2>
@@ -97,6 +108,7 @@
 <script>
 const N = 65536;
 const RED_AFTER = 16;                        // rolls (~16 expected hits per pair cell) before "never hit" means anything
+const STICK_BELOW = 5;                       // sticky bit fires when a side byte < 5, i.e. 5/256 ≈ 1.95% of bytes
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const img = ctx.createImageData(256, 256);
@@ -109,11 +121,12 @@ const meta = document.getElementById('meta');
 const pmeta = document.getElementById('pmeta');
 const statsEl = document.getElementById('stats');
 const chipBtn = document.getElementById('chip');
+const stickBtn = document.getElementById('stick');
 
 const POP = new Uint8Array(256);
 for (let v = 0; v < 256; v++) { let c = 0, x = v; while (x) { c += x & 1; x >>= 1; } POP[v] = c; }
 
-let chipped = false;
+let mode = 'fair';                           // 'fair' | 'chip' | 'stick'
 let rolls, pooled, pooledOnes, pairs, pairTotal;
 function reset() {
   rolls = 0; pooled = new Float64Array(256); pooledOnes = 0;
@@ -134,10 +147,16 @@ function nonzero() {
   }
 }
 
+const side = new Uint8Array(N);              // coin flips for the sticky bit, separate from the bytes themselves
+
 function roll(draw = true) {
   const bytes = new Uint8Array(N);          // 65536 is exactly the per-call cap
   crypto.getRandomValues(bytes);
-  if (chipped) for (let i = 0; i < N; i++) if (bytes[i] === 0) bytes[i] = nonzero();
+  if (mode === 'chip') for (let i = 0; i < N; i++) if (bytes[i] === 0) bytes[i] = nonzero();
+  if (mode === 'stick') {
+    crypto.getRandomValues(side);
+    for (let i = 0; i < N; i++) if (side[i] < STICK_BELOW) bytes[i] |= 1;
+  }
 
   let sum = 0, ones = 0, flips = 0, prev = bytes[0] >> 7;
   for (let i = 0; i < N; i++) {
@@ -164,7 +183,8 @@ function roll(draw = true) {
     px[o + 3] = 255;
   }
   ctx.putImageData(img, 0, 0);
-  meta.textContent = `roll #${rolls}${chipped ? ' (chipped)' : ''}, mean ${(sum / N).toFixed(2)} (expect ~127.5)`;
+  const tag = mode === 'chip' ? ' (chipped)' : mode === 'stick' ? ' (sticky bit)' : '';
+  meta.textContent = `roll #${rolls}${tag}, mean ${(sum / N).toFixed(2)} (expect ~127.5)`;
   drawPairs();
   drawHist();
   showStats(ones, flips);
@@ -248,15 +268,20 @@ function showStats(ones, flips) {
     row('runs, this roll', `${runs}, z = ${zRuns.toFixed(2)}`, `${eRuns.toFixed(0)} &plusmn; ${(2.58 * sdRuns).toFixed(0)}`, zClass(zRuns));
 }
 
+function setMode(m) {
+  mode = mode === m ? 'fair' : m;           // clicking the active one turns it off; only one flaw at a time
+  chipBtn.classList.toggle('on', mode === 'chip');
+  stickBtn.classList.toggle('on', mode === 'stick');
+  chipBtn.textContent = mode === 'chip' ? 'un-chip the die' : 'chip the die';
+  stickBtn.textContent = mode === 'stick' ? 'un-stick the bit' : 'sticky bit';
+  reset(); roll();                          // mixing honest and broken rolls in one pool would muddy both, so start over
+}
+
 document.getElementById('roll').addEventListener('click', () => roll());
 document.getElementById('roll10').addEventListener('click', () => { for (let i = 0; i < 9; i++) roll(false); roll(); });
 document.getElementById('reset').addEventListener('click', () => { reset(); roll(); });
-chipBtn.addEventListener('click', () => {
-  chipped = !chipped;                       // mixing honest and chipped rolls in one pool would muddy both, so start over
-  chipBtn.classList.toggle('on', chipped);
-  chipBtn.textContent = chipped ? 'un-chip the die' : 'chip the die';
-  reset(); roll();
-});
+chipBtn.addEventListener('click', () => setMode('chip'));
+stickBtn.addEventListener('click', () => setMode('stick'));
 roll();
 </script>
 </body>
