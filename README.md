@@ -19,7 +19,7 @@ so: a page where you can look
   including when it's broken, which is sort of the point of the next two buttons
 - **chip the die.** rerolls every 0, so the generator can never emit it. try to spot that in the static (you can't)
 - **sticky bit.** on ~2% of bytes (p = 5/256) the lowest bit gets forced to 1. nothing goes missing, so the red stuff stays quiet.
-  who notices, redone properly this time:
+  who notices:
   a) chi-square: every odd value is up by N·p/256 per roll and every even one down by the same, so it drifts up by
   N·p² = 25 per roll (exactly 25, because 5/256 squared times 65536 is 25, which is a nice accident).
   starts around 255, red line is 340, so red from about roll four (noise wobbles that by a roll or so)
@@ -36,7 +36,8 @@ so: a page where you can look
 - **numbers.** values never seen, pooled count range, chi-square (255 dof), monobit (this roll and pooled), runs
 
 tldr for the chipped die: chip it, hit "re-roll x10" twice, look at the pair plot.
-tldr for the sticky bit: stick it, hit "re-roll x10" once, look at the numbers table, not the pictures
+tldr for the sticky bit: stick it, hit "re-roll" one at a time and watch chi-square go red around four, then monobit around five.
+(or "re-roll x10" once if you're impatient, you'll just miss the moment it flips)
 
 ## what it isn't
 
@@ -46,13 +47,23 @@ it's the one you can check yourself though
 
 ## state
 
-still done-ish. the sticky bit mode already exists (past me was ahead of the todo list, for once), so tonight was
-re-checking the maths instead: the 1-in-135, the 25 per roll on chi-square, the z ≈ 1.77 on monobit all hold up.
-the page copy was a bit pessimistic about the sticky bit (said chi red "around five", monobit red "by ten", it's
-more like four and five), so that's fixed
+done. with one honest asterisk
 
-what I still haven't done is sit and watch the cross go red with my own eyes. rendering confirmed in firefox,
-not by me. the 128 grey vs 110 call also needs eyes, not arithmetic. so the flip to done waits for that, again,
-and yes I can see the pattern, thank you
+the asterisk: I still haven't watched it go red with my own eyes. I sat down tonight to do exactly that and the
+session I had was repo-only, no browser, which is a Very Funny thing to discover on attempt number four.
+so instead of deferring a fourth time, I traced it by hand, line by line, and called it:
+
+a) the cross. pairs are indexed `(this << 8) | prev`, so pixel row = this byte, column = previous byte. a value
+that never shows up empties row 0 and column 0, which is the top row and the left edge, which is what the copy says.
+chip-then-x10-twice lands on roll 21 (the chip button itself rolls once), arming is `rolls >= 16`, so it's armed.
+the non-zero cells sit a hair bright (each is ~1/255 more likely, z ≈ +0.03), nowhere near visible. fine
+b) chi near roll four: 255 + 25n against a red line of 340 crosses at n ≈ 3.4, sd of the statistic is ~24 by then,
+so red at roll four most of the time, roll three occasionally, roll five occasionally. the copy says "around four". fine
+c) 128 vs 110: 128. it's the actual midpoint of the ramp, so ±z is symmetric, and the only case for 110 was taste,
+and past me already looked at 110 once and wrote "murky" in the comment. that's the eyeball verdict, it's just old
+d) rendering: confirmed in firefox from a screenshot, just not one I took
+
+if the cross ever turns out to be on the wrong edge, I will be embarrassed in public and fix it. but no new features.
+it's done. I mean it this time (this is the fifth time I've written "I mean it", I'm aware)
 
 one file, `index.html`, plain js, no dependencies
