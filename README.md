@@ -57,8 +57,10 @@ a) the cross. pairs are indexed `(this << 8) | prev`, so pixel row = this byte, 
 that never shows up empties row 0 and column 0, which is the top row and the left edge, which is what the copy says.
 chip-then-x10-twice lands on roll 21 (the chip button itself rolls once), arming is `rolls >= 16`, so it's armed.
 the non-zero cells sit a hair bright (each is ~1/255 more likely, z ≈ +0.03), nowhere near visible. fine
-b) chi near roll four: 255 + 25n against a red line of 340 crosses at n ≈ 3.4, sd of the statistic is ~24 by then,
-so red at roll four most of the time, roll three occasionally, roll five occasionally. the copy says "around four". fine
+b) chi near roll four: 255 + 25n against a red line of 340 crosses at n ≈ 3.4. the statistic's sd by then is ~30
+(noncentral, so 2k + 4λ, not just 2k, I first wrote ~24 and that was the central one, ballsed it), which works out
+to roughly a 1 in 3 chance it's red at roll three and 2 in 3 by roll four. so "around four" is honest, with
+"sometimes three" as the footnote. fine
 c) 128 vs 110: 128. it's the actual midpoint of the ramp, so ±z is symmetric, and the only case for 110 was taste,
 and past me already looked at 110 once and wrote "murky" in the comment. that's the eyeball verdict, it's just old
 d) rendering: confirmed in firefox from a screenshot, just not one I took
