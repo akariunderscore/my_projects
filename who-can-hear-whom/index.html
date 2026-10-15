@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>who can hear whom</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; min-height: 100vh;
+    background: #0b0d10; color: #bbb;
+    font: 15px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 2rem 1rem; box-sizing: border-box;
+  }
+  h1 { font-weight: normal; font-size: 1.1rem; margin: 0 0 .25rem; color: #eee; }
+  .sub { margin: 0 0 1.5rem; color: #888; max-width: 40rem; text-align: center; }
+  canvas { border: 1px solid #222; background: #05070a; width: min(800px, 94vw); height: auto; aspect-ratio: 800 / 560; }
+  .row { margin: .75rem 0; display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; justify-content: center; }
+  button {
+    font: inherit; background: #161a1f; color: #ddd;
+    border: 1px solid #333; padding: .35rem .9rem; cursor: pointer;
+  }
+  button:hover { background: #1d2228; }
+  button.on { border-color: #e9b44c; color: #f3d28a; }
+  #info { color: #999; font-size: .85rem; min-height: 1.5em; text-align: center; max-width: 46rem; }
+  .note { max-width: 40rem; color: #777; font-size: .85rem; }
+  .note strong { color: #aaa; font-weight: normal; }
+  .key span { display: inline-block; width: 1.6em; height: 0; vertical-align: middle; margin-right: .3em; }
+  a { color: #9ab; }
+</style>
+</head>
+<body>
+  <h1>who can hear whom</h1>
+  <p class="sub">twelve made-up towns, each with an AM transmitter of some range. nobody draws the network, it falls out of the geometry. hover a town</p>
+
+  <canvas id="map" width="800" height="560"></canvas>
+  <div class="row"><span id="info"></span></div>
+  <div class="row">
+    <button id="circles" class="on">range circles</button>
+    <button id="reseed">another map</button>
+    <button id="home">the usual map</button>
+  </div>
+
+  <p class="note key">
+    <span style="border-top:2px solid #6f8a99"></span>both hear each other
+    &nbsp; <span style="border-top:2px dashed #b08a4a"></span>one way only (arrow points at the listener)
+  </p>
+  <p class="note">
+    <strong>the rule, all of it:</strong> town A hears town B if A sits inside B's circle. that's it. ranges differ,
+    so plenty of pairs only work in one direction, a big station shouting at a small one that can't shout back.
+    on hover: <span style="color:#e9b44c">amber</span> is who hears this town, <span style="color:#7fc4d9">blue</span> is who it hears,
+    and the count is how far a message could get if every town that heard it repeated it on
+  </p>
+  <p class="note">
+    <strong>the honest line:</strong> this is not radio. no propagation physics, no terrain, no skywave (which is the whole
+    reason AM goes far at night, and it's not here), no interference, no antennas. a range is a circle because circles are easy.
+    it's a toy about graphs that happen to have a map underneath, not a map that happens to have a graph on it
+  </p>
+  <p class="note">messages that crawl outward at a terrible typing speed: soon&trade;</p>
+
+<script src="main.js"></script>
+</body>
+</html>
