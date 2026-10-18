@@ -15,12 +15,15 @@
   }
   h1 { font-weight: normal; font-size: 1.1rem; margin: 0 0 .25rem; color: #eee; }
   .sub { margin: 0 0 1.5rem; color: #888; max-width: 40rem; text-align: center; }
-  canvas { border: 1px solid #222; background: #05070a; width: min(800px, 94vw); height: auto; aspect-ratio: 800 / 560; }
+  canvas { border: 1px solid #222; background: #05070a; width: min(800px, 94vw); height: auto; aspect-ratio: 800 / 560; cursor: crosshair; }
   .row { margin: .75rem 0; display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; justify-content: center; }
-  button {
+  button, input {
     font: inherit; background: #161a1f; color: #ddd;
-    border: 1px solid #333; padding: .35rem .9rem; cursor: pointer;
+    border: 1px solid #333; padding: .35rem .9rem;
   }
+  button { cursor: pointer; }
+  input { width: min(26rem, 80vw); }
+  input:focus { outline: none; border-color: #e9b44c; }
   button:hover { background: #1d2228; }
   button.on { border-color: #e9b44c; color: #f3d28a; }
   #info { color: #999; font-size: .85rem; min-height: 1.5em; text-align: center; max-width: 46rem; }
@@ -32,10 +35,11 @@
 </head>
 <body>
   <h1>who can hear whom</h1>
-  <p class="sub">twelve made-up towns, each with an AM transmitter of some range. nobody draws the network, it falls out of the geometry. hover a town</p>
+  <p class="sub">twelve made-up towns, each with an AM transmitter of some range. nobody draws the network, it falls out of the geometry. hover a town, click one, say something</p>
 
   <canvas id="map" width="800" height="560"></canvas>
   <div class="row"><span id="info"></span></div>
+  <div class="row"><input id="msg" maxlength="40" autocomplete="off" placeholder="click a town first"></div>
   <div class="row">
     <button id="circles" class="on">range circles</button>
     <button id="reseed">another map</button>
@@ -53,11 +57,17 @@
     and the count is how far a message could get if every town that heard it repeated it on
   </p>
   <p class="note">
-    <strong>the honest line:</strong> this is not radio. no propagation physics, no terrain, no skywave (which is the whole
-    reason AM goes far at night, and it's not here), no interference, no antennas. a range is a circle because circles are easy.
-    it's a toy about graphs that happen to have a map underneath, not a map that happens to have a graph on it
+    <strong>messages:</strong> five characters a second, one ring per letter. the further out a listener sits in the
+    speaker's circle, the more letters it loses (the · is a letter that didn't make it). once a town has heard the
+    whole thing it repeats it on, <em>as it heard it</em>, so the gaps stack up hop by hop and the colour drifts
+    amber to blue as it goes. a town only keeps the first version that reaches it, which is roughly how rumours work too
   </p>
-  <p class="note">messages that crawl outward at a terrible typing speed: soon&trade;</p>
+  <p class="note">
+    <strong>the honest line:</strong> this is not radio. no propagation physics, no terrain, no skywave (which is the whole
+    reason AM goes far at night, and it's not here), no interference, no antennas. a range is a circle because circles are easy,
+    and letters dropping with distance is a dice roll i made up. it's a toy about graphs that happen to have a map underneath,
+    not a map that happens to have a graph on it
+  </p>
 
 <script src="main.js"></script>
 </body>
