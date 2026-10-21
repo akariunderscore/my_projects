@@ -27,6 +27,10 @@
   button:hover { background: #1d2228; }
   button.on { border-color: #e9b44c; color: #f3d28a; }
   #info { color: #999; font-size: .85rem; min-height: 1.5em; text-align: center; max-width: 46rem; }
+  #log { width: min(800px, 94vw); font-size: .8rem; white-space: pre-wrap; margin: .25rem 0 1rem; }
+  #log .msg { border-left: 1px solid #2a2f35; padding: .3rem 0 .3rem .8rem; margin-bottom: .6rem; }
+  #log .head { margin-bottom: .15rem; }
+  #log .empty { color: #555; }
   .note { max-width: 40rem; color: #777; font-size: .85rem; }
   .note strong { color: #aaa; font-weight: normal; }
   .key span { display: inline-block; width: 1.6em; height: 0; vertical-align: middle; margin-right: .3em; }
@@ -45,6 +49,7 @@
     <button id="reseed">another map</button>
     <button id="home">the usual map</button>
   </div>
+  <div id="log"></div>
 
   <p class="note key">
     <span style="border-top:2px solid #6f8a99"></span>both hear each other
@@ -61,6 +66,10 @@
     speaker's circle, the more letters it loses (the · is a letter that didn't make it). once a town has heard the
     whole thing it repeats it on, <em>as it heard it</em>, so the gaps stack up hop by hop and the colour drifts
     amber to blue as it goes. a town only keeps the first version that reaches it, which is roughly how rumours work too
+  </p>
+  <p class="note">
+    <strong>the transcript:</strong> under the map, one line per town once it's heard the whole message: who it got it
+    from, what actually arrived, and how many letters went missing on the way. indented by hop. the last few messages stick around
   </p>
   <p class="note">
     <strong>the honest line:</strong> this is not radio. no propagation physics, no terrain, no skywave (which is the whole

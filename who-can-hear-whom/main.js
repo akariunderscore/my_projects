@@ -6,11 +6,13 @@ const CPS = 5;          // characters per second, on purpose
 const SPEED = 170;      // px per second a ring travels
 const RELAY_PAUSE = 0.7;// seconds a town waits before repeating what it heard
 const DROP = '·';
+const KEEP_LOGS = 3;    // how many messages the transcript remembers
 const cv = document.getElementById('map');
 const ctx = cv.getContext('2d');
 const info = document.getElementById('info');
 const circlesBtn = document.getElementById('circles');
 const msgIn = document.getElementById('msg');
+const logEl = document.getElementById('log');
 
 // mulberry32, tiny and good enough for scattering towns
 function prng(seed) {
@@ -81,30 +83,34 @@ function stats(h) {
   return { mutual, oneway, deaf, mute, full };
 }
 
-// rather than eyeball seeds, the usual map is the first seed from here that's
-// actually interesting: a few one-way links, exactly one deaf town, and still
-// a decent chunk of towns that can reach everyone (the deaf one can still shout)
+// the usual map: score seeds by how far they are from 'interesting' (a few one-way
+// links, exactly one deaf town, nobody mute, a decent chunk that can reach everyone)
+// and keep the best. no hard fallback any more, so it can't quietly give up
 const HOME_SEED = (() => {
-  for (let s = 20261015; s < 20261015 + 4000; s++) {
+  let best = 20261015, bestScore = Infinity;
+  for (let s = 20261015; s < 20261015 + 3000; s++) {
     const m = makeMap(s);
     if (m.towns.length < N) continue;
     const k = stats(m.hears);
-    if (k.oneway >= 3 && k.oneway <= 6 && k.deaf === 1 && k.mute === 0 && k.full >= 4) return s;
+    const score = Math.abs(k.oneway - 4) + 3 * Math.abs(k.deaf - 1) + 3 * k.mute + Math.max(0, 4 - k.full);
+    if (score < bestScore) { best = s; bestScore = score; }
+    if (score === 0) break;
   }
-  return 20261015;
+  return best;
 })();
 
 let seed = HOME_SEED, towns = [], hears = [], hover = -1, sel = -1, showCircles = true, stars = [];
 let summary = '';
 // message state
-let txs = [], events = [], bufs = [], relayed = new Set(), nextId = 1;
+let txs = [], events = [], bufs = [], relayed = new Set(), nextId = 1, logs = [];
 
 function build(s) {
   seed = s;
   ({ towns, hears, stars } = makeMap(s));
   hover = -1; sel = -1;
-  txs = []; events = []; relayed = new Set();
+  txs = []; events = []; relayed = new Set(); logs = [];
   bufs = towns.map(() => null);
+  renderLog();
   const k = stats(hears);
   summary = `${seed === HOME_SEED ? 'the usual map' : 'seed ' + seed}: ${k.mutual} two-way links, ${k.oneway} one-way, ` +
     `${k.deaf} town${k.deaf === 1 ? '' : 's'} hearing nobody, ${k.mute} nobody hears. ` +
@@ -116,15 +122,57 @@ function build(s) {
 const reach = i => reachIn(hears, i);
 const now = () => performance.now() / 1000;
 
-// chance a character gets lost, by how far out in the speaker's circle you are
+// chance a character gets lost, by how far out in the speaker's circle you are.
+// was 0.02 + 0.6q^2.5, which made the edge basically soup after one hop.
+// now: near-perfect for the inner half, about half the letters at the very edge
 function dropChance(d, r) {
   const q = Math.min(1, d / r);
-  return 0.02 + 0.6 * q ** 2.5;
+  return 0.02 + 0.45 * q ** 3;
+}
+
+// transcript: one entry per original message, one line per town that finished hearing it
+function renderLog() {
+  logEl.textContent = '';
+  if (!logs.length) {
+    logEl.innerHTML = '<div class="empty">(transcript of who heard what from whom shows up here)</div>';
+    return;
+  }
+  for (const L of logs.slice().reverse()) {
+    const box = document.createElement('div');
+    box.className = 'msg';
+    const head = document.createElement('div');
+    head.className = 'head';
+    head.style.color = genCol(0, 1);
+    head.textContent = `${towns[L.from].name} says: ${L.text}`;
+    box.appendChild(head);
+    for (const ln of L.lines) {
+      const d = document.createElement('div');
+      d.style.paddingLeft = (ln.gen * 1.2) + 'em';
+      d.style.color = genCol(ln.gen, 0.9);
+      const lost = [...ln.heard].filter(c => c === DROP).length;
+      d.textContent = `${towns[ln.by].name} › ${towns[ln.to].name}: ${ln.heard}` +
+        (ln.junk ? '  (nothing usable, stops here)' : lost ? `  (${lost} lost)` : '');
+      box.appendChild(d);
+    }
+    const missing = towns.length - 1 - L.lines.length;
+    if (missing > 0 && L.done) {
+      const d = document.createElement('div');
+      d.className = 'empty';
+      d.textContent = `${missing} town${missing === 1 ? '' : 's'} never heard it`;
+      box.appendChild(d);
+    }
+    logEl.appendChild(box);
+  }
 }
 
 function transmit(from, text, id, gen) {
   const t0 = now();
   txs.push({ from, len: text.length, t0, gen });
+  if (gen === 0) {
+    logs.push({ id, from, text, lines: [], done: false });
+    if (logs.length > KEEP_LOGS) logs.shift();
+    renderLog();
+  }
   // the speaker's own label types out too
   bufs[from] = { id, src: from, gen, chars: [], len: text.length, last: t0 };
   for (let i = 0; i < text.length; i++) events.push({ t: t0 + i / CPS, town: from, src: from, id, gen, i, ch: text[i], len: text.length });
@@ -140,8 +188,20 @@ function transmit(from, text, id, gen) {
   events.sort((x, y) => x.t - y.t);
 }
 
+function markDone() {
+  // a message is finished once nothing about it is still queued
+  let changed = false;
+  for (const L of logs) {
+    if (L.done) continue;
+    if (!events.some(e => e.id === L.id)) { L.done = true; changed = true; }
+  }
+  if (changed) renderLog();
+}
+
 function step(t) {
+  let any = false;
   while (events.length && events[0].t <= t) {
+    any = true;
     const e = events.shift();
     if (e.town === -1) { // a queued relay
       transmit(e.src, e.text, e.id, e.gen);
@@ -157,16 +217,20 @@ function step(t) {
     if (b.src !== e.src) continue; // later copies via other routes: ignored, first one wins
     b.chars[e.i] = e.ch;
     b.last = t;
-    // last letter in: repeat it on, errors and all
+    // last letter in: write it down, then repeat it on, errors and all
     if (e.i === e.len - 1 && e.town !== e.src && !relayed.has(e.id + ':' + e.town)) {
       relayed.add(e.id + ':' + e.town);
       const heard = Array.from({ length: e.len }, (_, i) => b.chars[i] || DROP).join('');
-      if (heard.split('').some(c => c !== DROP && c !== ' ')) {
+      const usable = heard.split('').some(c => c !== DROP && c !== ' ');
+      const L = logs.find(l => l.id === e.id);
+      if (L && e.town !== L.from) { L.lines.push({ by: e.src, to: e.town, heard, gen: e.gen, junk: !usable }); renderLog(); }
+      if (usable) {
         events.push({ t: t + RELAY_PAUSE, town: -1, src: e.town, id: e.id, gen: e.gen, text: heard });
         events.sort((x, y) => x.t - y.t);
       }
     }
   }
+  if (any) markDone();
   txs = txs.filter(x => t < x.t0 + x.len / CPS + towns[x.from].r / SPEED + 0.1);
 }
 
