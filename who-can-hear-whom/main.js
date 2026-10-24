@@ -130,7 +130,31 @@ function dropChance(d, r) {
   return 0.02 + 0.45 * q ** 3;
 }
 
-// transcript: one entry per original message, one line per town that finished hearing it
+const kept = s => [...s].filter(c => c !== DROP).length;
+
+// the heard text, with lost letters dimmed so the survivors are what you read
+function heardSpans(el, s) {
+  let run = '', runDrop = null;
+  const flush = () => {
+    if (!run) return;
+    const sp = document.createElement('span');
+    if (runDrop) sp.className = 'lost';
+    sp.textContent = run;
+    el.appendChild(sp);
+    run = '';
+  };
+  for (const c of s) {
+    const isDrop = c === DROP;
+    if (isDrop !== runDrop) { flush(); runDrop = isDrop; }
+    run += c;
+  }
+  flush();
+}
+
+// transcript: one entry per original message. real copies get a line each, indented by hop,
+// with how many letters went missing on *that* hop (not the running total, which was
+// what it used to print and made every later line look like a disaster).
+// the towns that only got noise are folded into one line at the bottom
 function renderLog() {
   logEl.textContent = '';
   if (!logs.length) {
@@ -145,20 +169,35 @@ function renderLog() {
     head.style.color = genCol(0, 1);
     head.textContent = `${towns[L.from].name} says: ${L.text}`;
     box.appendChild(head);
-    for (const ln of L.lines) {
+
+    const textOf = town => town === L.from ? L.text : (L.lines.find(x => x.to === town) || {}).heard || L.text;
+    const real = L.lines.filter(ln => !ln.junk), junk = L.lines.filter(ln => ln.junk);
+    for (const ln of real) {
       const d = document.createElement('div');
       d.style.paddingLeft = (ln.gen * 1.2) + 'em';
       d.style.color = genCol(ln.gen, 0.9);
-      const lost = [...ln.heard].filter(c => c === DROP).length;
-      d.textContent = `${towns[ln.by].name} › ${towns[ln.to].name}: ${ln.heard}` +
-        (ln.junk ? '  (nothing usable, stops here)' : lost ? `  (${lost} lost)` : '');
+      d.appendChild(document.createTextNode(`${towns[ln.by].name} › ${towns[ln.to].name}: `));
+      heardSpans(d, ln.heard);
+      const fresh = kept(textOf(ln.by)) - kept(ln.heard);
+      const tail = document.createElement('span');
+      tail.className = 'aside';
+      tail.textContent = fresh === 0 ? '  (clean hop)' : `  (−${fresh} on this hop, ${kept(ln.heard)}/${L.text.length} left)`;
+      d.appendChild(tail);
+      box.appendChild(d);
+    }
+    if (junk.length) {
+      const d = document.createElement('div');
+      d.className = 'empty';
+      d.textContent = `only noise reached ${junk.map(ln => towns[ln.to].name).join(', ')}, so it stopped there`;
       box.appendChild(d);
     }
     const missing = towns.length - 1 - L.lines.length;
-    if (missing > 0 && L.done) {
+    if (L.done) {
       const d = document.createElement('div');
       d.className = 'empty';
-      d.textContent = `${missing} town${missing === 1 ? '' : 's'} never heard it`;
+      const whole = real.filter(ln => kept(ln.heard) === L.text.length).length;
+      d.textContent = `${real.length} of ${towns.length - 1} got something readable, ${whole} word-perfect` +
+        (missing > 0 ? `, ${missing} never heard it at all` : '');
       box.appendChild(d);
     }
     logEl.appendChild(box);
