@@ -102,13 +102,17 @@ const HOME_SEED = (() => {
 let seed = HOME_SEED, towns = [], hears = [], hover = -1, sel = -1, showCircles = true, stars = [];
 let summary = '';
 // message state
-let txs = [], events = [], bufs = [], relayed = new Set(), nextId = 1, logs = [];
+// owner: 'id:town' -> which town's copy that town committed to. this used to live in the
+// on-screen label buffer, which draw() throws away once it fades, so a slow echo arriving
+// after the fade got treated as brand new (and the original speaker would happily repeat
+// a mangled copy of its own message back out). logic and display are separate now
+let txs = [], events = [], bufs = [], relayed = new Set(), owner = new Map(), nextId = 1, logs = [];
 
 function build(s) {
   seed = s;
   ({ towns, hears, stars } = makeMap(s));
   hover = -1; sel = -1;
-  txs = []; events = []; relayed = new Set(); logs = [];
+  txs = []; events = []; relayed = new Set(); owner = new Map(); logs = [];
   bufs = towns.map(() => null);
   renderLog();
   const k = stats(hears);
@@ -124,7 +128,9 @@ const now = () => performance.now() / 1000;
 
 // chance a character gets lost, by how far out in the speaker's circle you are.
 // was 0.02 + 0.6q^2.5, which made the edge basically soup after one hop.
-// now: near-perfect for the inner half, about half the letters at the very edge
+// now: near-perfect for the inner half, about half the letters at the very edge.
+// (back of envelope: a listener dropped uniformly in the circle loses ~20% on average,
+// 0.02 + 0.45 * E[q^3] with q's density 2q. lossy enough to stack over 3 hops, i think)
 function dropChance(d, r) {
   const q = Math.min(1, d / r);
   return 0.02 + 0.45 * q ** 3;
@@ -152,9 +158,9 @@ function heardSpans(el, s) {
 }
 
 // transcript: one entry per original message. real copies get a line each, indented by hop,
-// with how many letters went missing on *that* hop (not the running total, which was
-// what it used to print and made every later line look like a disaster).
-// the towns that only got noise are folded into one line at the bottom
+// with how many letters went missing on *that* hop (not the running total).
+// the parent's text is looked up by town, which is safe because owner/relayed mean each
+// town gets at most one line per message, and drops only ever add, so the diff is >= 0
 function renderLog() {
   logEl.textContent = '';
   if (!logs.length) {
@@ -212,6 +218,9 @@ function transmit(from, text, id, gen) {
     if (logs.length > KEEP_LOGS) logs.shift();
     renderLog();
   }
+  // a speaker has committed to its own version, original or relayed, and never takes another
+  owner.set(id + ':' + from, from);
+  relayed.add(id + ':' + from);
   // the speaker's own label types out too
   bufs[from] = { id, src: from, gen, chars: [], len: text.length, last: t0 };
   for (let i = 0; i < text.length; i++) events.push({ t: t0 + i / CPS, town: from, src: from, id, gen, i, ch: text[i], len: text.length });
@@ -246,23 +255,32 @@ function step(t) {
       transmit(e.src, e.text, e.id, e.gen);
       continue;
     }
+    // first copy to reach a town wins, forever, regardless of what the label is doing
+    const key = e.id + ':' + e.town;
+    const own = owner.get(key);
+    if (own === undefined) owner.set(key, e.src);
+    else if (own !== e.src) continue;
+
     let b = bufs[e.town];
     if (!b || b.id !== e.id) {
-      // first time this town hears this message: whoever got here first owns the label.
-      // (if it already had a newer message going, the older one loses. it's a group chat)
-      if (b && b.id > e.id) continue;
-      b = bufs[e.town] = { id: e.id, src: e.src, gen: e.gen, chars: [], len: e.len, last: t };
+      // label: a newer message already showing beats an older one. it's a group chat
+      if (b && b.id > e.id) b = null;
+      else b = bufs[e.town] = { id: e.id, src: e.src, gen: e.gen, chars: [], len: e.len, last: t, heard: [] };
     }
-    if (b.src !== e.src) continue; // later copies via other routes: ignored, first one wins
-    b.chars[e.i] = e.ch;
-    b.last = t;
+    // the letters themselves are kept per town per message, off-screen, so a hidden label still counts
+    const hk = 'h:' + key;
+    let got = owner.get(hk);
+    if (!got) owner.set(hk, got = []);
+    got[e.i] = e.ch;
+    if (b) { b.chars[e.i] = e.ch; b.last = t; }
+
     // last letter in: write it down, then repeat it on, errors and all
-    if (e.i === e.len - 1 && e.town !== e.src && !relayed.has(e.id + ':' + e.town)) {
-      relayed.add(e.id + ':' + e.town);
-      const heard = Array.from({ length: e.len }, (_, i) => b.chars[i] || DROP).join('');
+    if (e.i === e.len - 1 && !relayed.has(key)) {
+      relayed.add(key);
+      const heard = Array.from({ length: e.len }, (_, i) => got[i] || DROP).join('');
       const usable = heard.split('').some(c => c !== DROP && c !== ' ');
       const L = logs.find(l => l.id === e.id);
-      if (L && e.town !== L.from) { L.lines.push({ by: e.src, to: e.town, heard, gen: e.gen, junk: !usable }); renderLog(); }
+      if (L) { L.lines.push({ by: e.src, to: e.town, heard, gen: e.gen, junk: !usable }); renderLog(); }
       if (usable) {
         events.push({ t: t + RELAY_PAUSE, town: -1, src: e.town, id: e.id, gen: e.gen, text: heard });
         events.sort((x, y) => x.t - y.t);
@@ -373,7 +391,7 @@ function draw(t) {
     const lx = tw.x + (left ? -12 : 12);
     ctx.fillStyle = focus >= 0 && fill === '#3a4248' ? '#3a4248' : '#8f9aa0';
     ctx.fillText(tw.name, lx, tw.y - 1);
-    // what this town last heard (or said), fading once it goes quiet
+    // what this town last heard (or said), fading once it goes quiet. purely cosmetic now
     const b = bufs[i];
     if (b) {
       const age = t - b.last, a = age < 6 ? 1 : Math.max(0, 1 - (age - 6) / 4);
