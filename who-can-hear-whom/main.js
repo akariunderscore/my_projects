@@ -101,18 +101,21 @@ const HOME_SEED = (() => {
 
 let seed = HOME_SEED, towns = [], hears = [], hover = -1, sel = -1, showCircles = true, stars = [];
 let summary = '';
-// message state
-// owner: 'id:town' -> which town's copy that town committed to. this used to live in the
-// on-screen label buffer, which draw() throws away once it fades, so a slow echo arriving
-// after the fade got treated as brand new (and the original speaker would happily repeat
-// a mangled copy of its own message back out). logic and display are separate now
-let txs = [], events = [], bufs = [], relayed = new Set(), owner = new Map(), nextId = 1, logs = [];
+// message state, all keyed by 'id:town'
+//   owner:   which speaker's copy that town committed to (first to arrive wins, forever)
+//   letters: the characters that town has actually received of that copy, by index
+//   relayed: that town has already said its piece about this message
+// none of this lives in the on-screen label buffers, which draw() throws away once they fade.
+// (letters used to be smuggled into owner under 'h:' keys, which worked and was gross)
+let txs = [], events = [], bufs = [], nextId = 1, logs = [];
+let relayed = new Set(), owner = new Map(), letters = new Map();
 
 function build(s) {
   seed = s;
   ({ towns, hears, stars } = makeMap(s));
   hover = -1; sel = -1;
-  txs = []; events = []; relayed = new Set(); owner = new Map(); logs = [];
+  txs = []; events = []; logs = [];
+  relayed = new Set(); owner = new Map(); letters = new Map();
   bufs = towns.map(() => null);
   renderLog();
   const k = stats(hears);
@@ -244,6 +247,9 @@ function markDone() {
     if (!events.some(e => e.id === L.id)) { L.done = true; changed = true; }
   }
   if (changed) renderLog();
+  // once every message in flight is done, the per-town bookkeeping is dead weight.
+  // ids only go up, so nothing old can come back and need it
+  if (!events.length && letters.size) { owner.clear(); relayed.clear(); letters.clear(); }
 }
 
 function step(t) {
@@ -265,12 +271,11 @@ function step(t) {
     if (!b || b.id !== e.id) {
       // label: a newer message already showing beats an older one. it's a group chat
       if (b && b.id > e.id) b = null;
-      else b = bufs[e.town] = { id: e.id, src: e.src, gen: e.gen, chars: [], len: e.len, last: t, heard: [] };
+      else b = bufs[e.town] = { id: e.id, src: e.src, gen: e.gen, chars: [], len: e.len, last: t };
     }
     // the letters themselves are kept per town per message, off-screen, so a hidden label still counts
-    const hk = 'h:' + key;
-    let got = owner.get(hk);
-    if (!got) owner.set(hk, got = []);
+    let got = letters.get(key);
+    if (!got) letters.set(key, got = []);
     got[e.i] = e.ch;
     if (b) { b.chars[e.i] = e.ch; b.last = t; }
 
