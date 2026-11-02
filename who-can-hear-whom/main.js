@@ -106,7 +106,6 @@ let summary = '';
 //   letters: the characters that town has actually received of that copy, by index
 //   relayed: that town has already said its piece about this message
 // none of this lives in the on-screen label buffers, which draw() throws away once they fade.
-// (letters used to be smuggled into owner under 'h:' keys, which worked and was gross)
 let txs = [], events = [], bufs = [], nextId = 1, logs = [];
 let relayed = new Set(), owner = new Map(), letters = new Map();
 
@@ -130,10 +129,9 @@ const reach = i => reachIn(hears, i);
 const now = () => performance.now() / 1000;
 
 // chance a character gets lost, by how far out in the speaker's circle you are.
-// was 0.02 + 0.6q^2.5, which made the edge basically soup after one hop.
-// now: near-perfect for the inner half, about half the letters at the very edge.
-// (back of envelope: a listener dropped uniformly in the circle loses ~20% on average,
-// 0.02 + 0.45 * E[q^3] with q's density 2q. lossy enough to stack over 3 hops, i think)
+// near-perfect for the inner half, about half the letters at the very edge.
+// (back of envelope says ~20% average for a listener dropped uniformly in the circle.
+// the tally under each message now reports the *measured* per-hop loss, so i can stop guessing)
 function dropChance(d, r) {
   const q = Math.min(1, d / r);
   return 0.02 + 0.45 * q ** 3;
@@ -181,13 +179,19 @@ function renderLog() {
 
     const textOf = town => town === L.from ? L.text : (L.lines.find(x => x.to === town) || {}).heard || L.text;
     const real = L.lines.filter(ln => !ln.junk), junk = L.lines.filter(ln => ln.junk);
+    // per-hop loss, as a fraction of what the speaker actually had to give. this is the
+    // number the dropChance comment is guessing at
+    let lossSum = 0, lossN = 0, deepest = 0;
     for (const ln of real) {
+      const had = kept(textOf(ln.by));
+      const fresh = had - kept(ln.heard);
+      if (had > 0) { lossSum += fresh / had; lossN++; }
+      deepest = Math.max(deepest, ln.gen);
       const d = document.createElement('div');
       d.style.paddingLeft = (ln.gen * 1.2) + 'em';
       d.style.color = genCol(ln.gen, 0.9);
       d.appendChild(document.createTextNode(`${towns[ln.by].name} › ${towns[ln.to].name}: `));
       heardSpans(d, ln.heard);
-      const fresh = kept(textOf(ln.by)) - kept(ln.heard);
       const tail = document.createElement('span');
       tail.className = 'aside';
       tail.textContent = fresh === 0 ? '  (clean hop)' : `  (−${fresh} on this hop, ${kept(ln.heard)}/${L.text.length} left)`;
@@ -205,8 +209,11 @@ function renderLog() {
       const d = document.createElement('div');
       d.className = 'empty';
       const whole = real.filter(ln => kept(ln.heard) === L.text.length).length;
+      const secs = Math.round(L.t1 - L.t0);
       d.textContent = `${real.length} of ${towns.length - 1} got something readable, ${whole} word-perfect` +
-        (missing > 0 ? `, ${missing} never heard it at all` : '');
+        (missing > 0 ? `, ${missing} never heard it at all` : '') +
+        `. ${deepest} hop${deepest === 1 ? '' : 's'} deep, quiet after ${secs}s` +
+        (lossN ? `, lost ${Math.round(100 * lossSum / lossN)}% per hop on average` : '');
       box.appendChild(d);
     }
     logEl.appendChild(box);
@@ -217,7 +224,7 @@ function transmit(from, text, id, gen) {
   const t0 = now();
   txs.push({ from, len: text.length, t0, gen });
   if (gen === 0) {
-    logs.push({ id, from, text, lines: [], done: false });
+    logs.push({ id, from, text, lines: [], done: false, t0, t1: t0 });
     if (logs.length > KEEP_LOGS) logs.shift();
     renderLog();
   }
@@ -239,17 +246,22 @@ function transmit(from, text, id, gen) {
   events.sort((x, y) => x.t - y.t);
 }
 
-function markDone() {
-  // a message is finished once nothing about it is still queued
+function markDone(t) {
+  // a message is finished once nothing about it is still queued.
+  // (relays are queued as events *before* this runs, so a pending echo keeps it open)
   let changed = false;
   for (const L of logs) {
     if (L.done) continue;
-    if (!events.some(e => e.id === L.id)) { L.done = true; changed = true; }
+    if (!events.some(e => e.id === L.id)) { L.done = true; L.t1 = t; changed = true; }
   }
   if (changed) renderLog();
-  // once every message in flight is done, the per-town bookkeeping is dead weight.
-  // ids only go up, so nothing old can come back and need it
-  if (!events.length && letters.size) { owner.clear(); relayed.clear(); letters.clear(); }
+  // once everything is quiet, the per-town bookkeeping is dead weight. ids only go up,
+  // so nothing old can come back and need it.
+  // was gated on letters.size, which missed a message nobody could hear (owner/relayed
+  // still had the speaker's entry and never got cleared). small leak, but a leak
+  if (!events.length && (owner.size || relayed.size || letters.size)) {
+    owner.clear(); relayed.clear(); letters.clear();
+  }
 }
 
 function step(t) {
@@ -292,7 +304,7 @@ function step(t) {
       }
     }
   }
-  if (any) markDone();
+  if (any) markDone(t);
   txs = txs.filter(x => t < x.t0 + x.len / CPS + towns[x.from].r / SPEED + 0.1);
 }
 
